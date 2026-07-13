@@ -58,6 +58,20 @@
 </div>
 
 <script>
+const params = new URLSearchParams(location.search);
+const dashMode = params.get('mode') === 'dashboard';
+const channel = params.get('channel') || '';
+if (dashMode) {
+  document.title = 'Whiteboard → Dashboard';
+  document.querySelector('header h1').textContent = '🎨 Whiteboard → Dashboard';
+  document.querySelector('header .hint').textContent = 'Sketch the chart you want — bars, a line, labels — and get a real Tableau dashboard.';
+  document.getElementById('tableName').placeholder = 'hint (optional) — e.g. table name';
+  document.getElementById('extract').textContent = '📊 Build dashboard';
+  document.querySelector('#result .muted').innerHTML =
+    'Draw the chart you want — e.g. a few bars with category names, write the table name — then click <b>Build dashboard</b>.' +
+    (channel ? ' The finished chart also posts back to your Slack channel.' : '');
+}
+
 const canvas = document.getElementById('board');
 const ctx = canvas.getContext('2d');
 ctx.fillStyle = '#fbfbf7'; ctx.fillRect(0,0,canvas.width,canvas.height);
@@ -92,6 +106,27 @@ canvas.addEventListener('touchstart',start); canvas.addEventListener('touchmove'
 
 document.getElementById('extract').onclick = async () => {
   const out = document.getElementById('out');
+  if (dashMode) {
+    out.innerHTML = '<span class="muted">🧠 Reading your sketch with Gemma, then publishing to Tableau… (~40s)</span>';
+    try {
+      const res = await fetch('/dashboard', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ image: canvas.toDataURL('image/png'), channel, hint: document.getElementById('tableName').value })
+      });
+      const d = await res.json();
+      if (!d.ok) {
+        out.innerHTML = '<span class="err">'+(d.message||d.error||'Build failed')+'</span>'
+          + (d.described ? '<div class="muted" style="margin-top:6px">I read your sketch as: “'+d.described+'”</div>' : '');
+        return;
+      }
+      out.innerHTML = '<div class="ok">✅ '+d.title+' — '+d.rows+' rows from <code>'+d.table+'</code></div>'
+        + '<div class="muted" style="margin-top:6px">I read your sketch as: “'+d.described+'”</div>'
+        + '<img src="data:image/png;base64,'+d.png+'" style="max-width:100%;border:1px solid #e3e6ea;border-radius:8px;margin-top:10px">'
+        + '<div style="margin-top:8px"><a href="'+d.url+'" target="_blank">Open in Tableau</a>'
+        + (d.posted ? ' · <span class="ok">posted to Slack ✓</span>' : '') + '</div>';
+    } catch (e) { out.innerHTML = '<span class="err">'+e.message+'</span>'; }
+    return;
+  }
   out.innerHTML = '<span class="muted">🧠 Reading your drawing with Gemma on the AMD GPU… (~15s)</span>';
   try {
     const res = await fetch('/extract', {

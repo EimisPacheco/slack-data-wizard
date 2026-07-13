@@ -37,11 +37,14 @@ Everything below happens in a Slack message. No console, no SQL, no BI licence, 
 |---|---|
 | Drop a **CSV** | Infers every column type, asks what to call the table, loads it |
 | Drop a **scanned PDF** | **Gemma's vision** reads the table off the page image and loads it |
-| **Draw a table** on the whiteboard | **Gemma's vision** turns the drawing into a real table — ⚠️ *in progress, not yet verified* |
+| **Draw a table** on the whiteboard | **Gemma's vision** turns the drawing into a real table |
+| _"draw a dashboard"_ — then **sketch the chart** | **Gemma's vision reads the drawing itself** — bar shapes, handwritten labels, the table name — and a real Tableau workbook posts back into the channel |
+| Record a **voice note** 🎤 | **ElevenLabs** transcribes it, the answer posts as a table, and a **spoken reply** comes back as a playable clip |
 | _"how many signups per country?"_ | **Gemma writes the SQL**, runs it, returns a formatted table |
 | _"create a schema called sales"_ | **Gemma writes the DDL** — creation is natural language too |
 | _"build a medallion pipeline"_ | Bronze → Silver → Gold, with lineage, dedup and a chosen aggregation |
 | _"create a dashboard with signups"_ | **Gemma picks the chart**, and a real Tableau workbook is published |
+| _"generate 20 fake vendors"_ | Synthetic rows via OpenAI — or **real, cited figures** from the web via Perplexity |
 | _"delete the inactive users"_ | Shows you the SQL and **waits for you to click** before touching anything |
 
 The person doing this does not know they are using Unity Catalog, a medallion architecture, or a
@@ -55,15 +58,15 @@ Gemma is not a garnish on this project. **Gemma is the product's reasoning.** Re
 Data Wizard stops being able to think — there is no fallback path in which a human writes the SQL.
 
 `gemma4:31b` is served with Ollama on an **AMD Instinct GPU on AMD Developer Cloud (ROCm)**, and it
-is the engine behind four independent capabilities:
+is the engine behind five independent capabilities:
 
 | Capability | What Gemma does | Module |
 |---|---|---|
 | **Natural language → SQL** | Reads the live schema, writes one Databricks statement, explains it | `slack-data-agent/nl2sql.js` |
 | **Natural language → DDL** | `CREATE SCHEMA`, `CREATE TABLE`, `SHOW`, `DESCRIBE` — all model-authored | `slack-data-agent/nl2sql.js` |
 | **Vision: scanned document → table** | Reads a rasterised page image and extracts the table structure | `pdf-extract/gemma.js` |
-| **Vision: whiteboard → table** ⚠️ *in progress* | Turns a hand-drawn table into a schema and rows. Built on the same Gemma vision path as the scanned page, but **not yet verified end-to-end**. | `whiteboard/` |
-| **Chart selection** | Chooses chart type, dimension, measure and aggregation from a sentence | `viz-builder/spec.js` |
+| **Vision: whiteboard → table & dashboard** | Reads a hand-drawn table into schema and rows — or reads a **sketched chart** (bar shapes, handwritten labels, the table name) and turns it into a validated spec for a published Tableau workbook. Verified end-to-end on real drawings. | `whiteboard/` |
+| **Chart selection** | Chooses chart type, dimension, measure and aggregation from a sentence — the same path a sketch flows into | `viz-builder/spec.js` |
 
 The **Fireworks AI API** serves the same open-source Gemma family as an automatic fallback for the
 vision path, so a GPU cold-start never becomes a failed user request.
@@ -157,7 +160,9 @@ Slack (Bolt, Socket Mode, Block Kit)
   ├── CSV / scanned PDF / whiteboard ──► Gemma vision (AMD GPU) ──► typed rows
   ├── plain-English question ──────────► Gemma NL→SQL (AMD GPU) ──► guard ──► Databricks
   ├── "create a dashboard" ────────────► Gemma chart spec (AMD GPU) ──► Tableau workbook
-  ├── voice ───────────────────────────► ElevenLabs agent ──► the same functions
+  ├── "draw a dashboard" + a sketch ───► Gemma vision (AMD GPU) ──► chart spec ──► Tableau ──► back into Slack
+  ├── voice note 🎤 ───────────────────► ElevenLabs Scribe STT ──► same NL→SQL ──► ElevenLabs TTS spoken reply
+  ├── live voice ──────────────────────► ElevenLabs conversational agent ──► the same functions
   └── MCP (Claude · Cursor · ChatGPT) ─► mcp-server ──► the same functions
                                               │
                                           Databricks
@@ -169,7 +174,7 @@ Slack (Bolt, Socket Mode, Block Kit)
 | `slack-data-agent/` | The agent: Block Kit UI, NL→SQL, safety guard, medallion pipeline |
 | `csv-to-db/` | RFC-4180 parser and type inference (incl. thousands separators) |
 | `pdf-extract/` | Rasterise a scanned PDF, extract its table with Gemma vision |
-| `whiteboard/` | Draw a table by hand, get a real one — ⚠️ *in progress* |
+| `whiteboard/` | Draw a **table** by hand, get a real one — or sketch a **chart** and get a published Tableau dashboard posted back into Slack |
 | `viz-builder/` | Sentence → Tableau `.twb` → published workbook → rendered PNG |
 | `datagen/` | Bootstrap a table from the live web (Perplexity) or synthetically (OpenAI) |
 | `voice-agent/` | ElevenLabs voice agent: ask out loud, answers + transcripts posted back to Slack |
@@ -197,8 +202,9 @@ against whatever tables actually exist in your catalog. These are just examples 
 **📥 Load data**
 - Drop a **`.csv`** into the channel — every column type is inferred, then it asks what to name the table
 - Drop a **scanned `.pdf`** — Gemma's vision reads the table off the page image
+- _"draw a table"_ — sketch it on the whiteboard, Gemma's vision reads it into typed rows
 - Then choose: **a new table** (you name it) or **an existing table** → **append** or **replace**
-- **Build medallion pipeline** — bronze / silver / gold in one click
+- **Build pipeline** — bronze / silver / gold in one click
 
 **❓ Ask questions**
 - _"how many signups per country?"_
@@ -217,18 +223,21 @@ against whatever tables actually exist in your catalog. These are just examples 
 
 **🌐 Generate a table**
 - _"create a table of the top 10 countries by population"_ — **real** figures from the web, with citations
-- _"generate 20 fake employees"_ — **synthetic** rows
+- _"generate 20 fake vendors with contact emails"_ — **synthetic** rows; any phrasing that names a source works
 - If it's ambiguous, Data Wizard asks you: 🌐 real or 🎲 synthetic?
 
 **📊 Dashboards**
 - _"create a dashboard with hackathon_signups"_ — Gemma picks the chart and a **real Tableau workbook is published**
+- _"draw a dashboard"_ — **sketch the chart on the whiteboard**; Gemma's vision reads the drawing (bar shapes, handwritten labels, the table name), validates it against the live schema, publishes the workbook, and **posts the chart back into the channel**
 
 **⚠️ Change data** — always confirmed first
 - _"drop the bronze table"_ · _"delete the inactive users"_
 - The SQL is **shown, explained in plain English, and waits for your click**
 
 **🎙 Ask by voice**
-- Speak to the ElevenLabs "Data Wizard Voice" agent — it runs the same NL→SQL path, answers out loud, and posts every Q&A + the full transcript back into Slack. Destructive SQL is refused by voice.
+- Record a **voice note** (🎤 in the message box) — **ElevenLabs Scribe** transcribes it (Slack's own transcription is tried first), the question runs the same NL→SQL path, the answer posts as a table, and a **spoken reply** (ElevenLabs TTS) comes back as a playable clip
+- Or speak to the ElevenLabs "Data Wizard Voice" agent — it runs the same NL→SQL path, answers out loud, and posts every Q&A + the full transcript back into Slack
+- Destructive SQL is **never executed from voice** — it posts for a confirming click
 
 **Where you are**
 - `help` · `context` (where am I?) · `use catalog <name>` · `use schema <name>`
@@ -247,7 +256,8 @@ node app.js
 Optional extras:
 
 ```bash
-(cd voice-agent && node server.js)      # voice agent (needs its HTTPS tunnel for ElevenLabs)
+(cd whiteboard && node server.js)       # whiteboard → table / dashboard, http://localhost:3200
+(cd voice-agent && node server.js)      # live voice agent (needs its HTTPS tunnel for ElevenLabs)
 mcp-server/start-hosted.sh              # MCP endpoint for Slack / Claude / Cursor / ChatGPT
 ```
 

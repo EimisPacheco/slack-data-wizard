@@ -3,7 +3,7 @@ for (const l of fs.readFileSync('../.env','utf8').split('\n')) { const m=l.match
 import { ElevenLabsClient } from '@elevenlabs/elevenlabs-js';
 const client = new ElevenLabsClient({ apiKey: process.env.ELEVENLABS_API_KEY });
 const agentId = fs.readFileSync('/tmp/new_agent_id.txt','utf8').trim();
-const URL = 'https://reviewed-pulling-because-char.trycloudflare.com';
+const URL = 'https://layers-bind-forget-pixel.trycloudflare.com';
 
 // 1) create the webhook tool
 const tool = await client.conversationalAi.tools.create({

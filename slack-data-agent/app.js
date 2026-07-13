@@ -57,10 +57,21 @@ const HELP_TEXT =
 
 *Load data*
 • Drop a *.csv* — or a *scanned .pdf* (Gemma reads the table from the image) — then pick
-  *Load as table* or *Build medallion pipeline* (bronze/silver/gold).
+  *Load table* or *Build pipeline* (bronze/silver/gold).
 
 *Ask anything in plain English*
 • _"how many signups per country?"_  _"top 3 by score"_  _"show the gold table"_
+
+*Generate a table*
+• _"create a table of the top 10 countries by population"_ — *real*, cited figures from the web
+• _"generate 20 fake employees"_ — *synthetic* rows
+
+*Dashboards*
+• _"create a dashboard with hackathon_signups"_ — Gemma picks the chart and publishes a *real Tableau workbook*; the chart posts back into the channel.
+
+*Voice*
+• Record a *voice clip* (🎤 in the message box) — I transcribe it, answer with the table, and reply with a spoken clip.
+• Or talk live to the ElevenLabs *Data Wizard Voice* agent — answers and full transcripts post back into Slack.
 
 *Change data (always confirmed first)*
 • _"drop the bronze table"_, _"delete inactive users"_ — I show the SQL and wait for your click.`;
@@ -106,6 +117,23 @@ async function tryContextCommand(text, userId, channel, client) {
 // "create/make/generate a table of <description>" → data generation, not SQL.
 const DATAGEN_RE = /^(?:create|make|generate|build|get|fetch|pull)\s+(?:me\s+)?(?:a\s+|an\s+)?(?:table|dataset|data)\s+(?:of|about|on|for|with|from)\s+(.+)/i;
 
+// The strict form misses real phrasings ("create a vendors table with synthetic data",
+// "generate 20 fake employees") — those fell through to NL→SQL, which can only CREATE an
+// empty table. So: any create-verb sentence that names a data source (fake/real/etc.) is
+// data generation too — unless it's a dashboard/whiteboard request, which owns those words.
+const DATAGEN_SOURCE_RE = /\b(fake|synthetic|dummy|sample|mock|random|made[- ]?up|placeholder|real|actual|from the (?:web|internet)|perplexity)\b/i;
+
+function detectDataGen(text) {
+  const m = text.match(DATAGEN_RE);
+  if (m) return m[1].trim();
+  if (/^(?:please\s+)?(?:create|make|generate|build|get|fetch|pull)\b/i.test(text)
+      && DATAGEN_SOURCE_RE.test(text)
+      && !VIZ_RE.test(text) && !DRAW_RE.test(text)) {
+    return text.replace(/^(?:please\s+)?(?:create|make|generate|build|get|fetch|pull)\s+(?:me\s+)?/i, '').trim();
+  }
+  return null;
+}
+
 /**
  * Cleans a filename or description into a sensible SUGGESTED table name. Real exports look like
  * "2026_q3_export_signups_v2.csv" — strip the noise so the pre-filled suggestion is the word the
@@ -131,17 +159,42 @@ function suggestTableName(raw) {
 // of a SQL statement, but wrong about what Data Wizard can do.
 const VIZ_RE = /\b(dash?boards?|darshboards?|charts?|graphs?|visuali[sz]\w*|visual|viz|plots?)\b/i;
 
+// "draw / sketch a dashboard" → the whiteboard web app (Slack can't host a canvas natively).
+// Must be checked before VIZ_RE or "draw a dashboard" falls through to the typed-request flow.
+const DRAW_RE = /\b(draw|sketch|doodle|whiteboard)\b/i;
+const WHITEBOARD_URL = (process.env.WHITEBOARD_URL || 'http://localhost:3200').replace(/\/$/, '');
+
+async function handleWhiteboardLink(text, channel, client) {
+  const mode = /\btable\b/i.test(text) && !VIZ_RE.test(text) ? 'table' : 'dashboard';
+  const url = `${WHITEBOARD_URL}/?mode=${mode}&channel=${channel}`;
+  const body = mode === 'dashboard'
+    ? ':art: *Draw your dashboard* — sketch the chart you want (bars, a line…), write the table name on the board, then click *Build dashboard*. I publish it to Tableau and post the chart back here.'
+    : ':art: *Draw your table* — a header row and a few data rows, then click *Extract to table*. It lands in your lakehouse and you can ask me about it.';
+  await post(client, channel, body, [
+    { type: 'section', text: { type: 'mrkdwn', text: body } },
+    { type: 'actions', elements: [{
+      type: 'button', style: 'primary', action_id: 'open_whiteboard', url,
+      text: { type: 'plain_text', text: '🎨 Open the whiteboard' },
+    }] },
+  ]);
+  return { spoken: mode === 'dashboard'
+    ? 'I posted a whiteboard link. Sketch your dashboard there and the finished chart will come back to this channel.'
+    : 'I posted a whiteboard link. Draw your table there and it will load into your lakehouse.' };
+}
+
 async function handleQuestion(text, userId, channel, client) {
-  if (await tryContextCommand(text, userId, channel, client)) return;
+  if (await tryContextCommand(text, userId, channel, client)) return {};
 
-  const dg = text.match(DATAGEN_RE);
-  if (dg) { await handleDataGen(dg[1].trim(), userId, channel, client); return; }
+  const dg = detectDataGen(text);
+  if (dg) { await handleDataGen(dg, userId, channel, client); return { spoken: 'Working on your table — a preview will post here shortly.' }; }
 
-  if (VIZ_RE.test(text)) { await handleDashboard(text, userId, channel, client); return; }
+  if (DRAW_RE.test(text)) return handleWhiteboardLink(text, channel, client);
+
+  if (VIZ_RE.test(text)) { await handleDashboard(text, userId, channel, client); return { spoken: 'Publishing your dashboard — the chart will appear here in a moment.' }; }
 
   const ctx = ctxOf(userId);
   const plan = await planQuery(text, ctx);
-  if (!plan.ok) { await post(client, channel, `:no_entry: ${plan.reason}`); return; }
+  if (!plan.ok) { await post(client, channel, `:no_entry: ${plan.reason}`); return { spoken: `I couldn't answer that. ${plan.reason}` }; }
 
   if (plan.needsConfirmation) {
     const id = `sql_${userId}_${Object.keys(Object.fromEntries(pendingSql)).length}`;
@@ -156,7 +209,7 @@ async function handleQuestion(text, userId, channel, client) {
       ],
     };
     await postRich(client, channel, 'This changes data — confirm?', [card(opts)], cardClassic(opts));
-    return;
+    return { spoken: 'That would change your data, so I will not run it from a voice note. The SQL is posted — confirm it with a click.' };
   }
 
   const out = await runPlanned(plan, ctx);
@@ -183,10 +236,25 @@ async function handleQuestion(text, userId, channel, client) {
       { type: 'context', elements: [{ type: 'mrkdwn', text: `\`${plan.sql}\`  ·  _${ctx.catalog}.${ctx.schema}_` }] },
     ];
     await postRich(client, channel, plan.explanation || 'Result', rich, classic);
+    return { spoken: speakable(plan, out) };
   } else {
     await post(client, channel, `:white_check_mark: ${plan.explanation}\nAffected *${out.affectedRows}* rows.\n\`${plan.sql}\``);
+    return { spoken: `Done. ${plan.explanation}` };
   }
 }
+
+// Short spoken summary of a query result — same shape the voice agent uses.
+function speakable(plan, out) {
+  if (plan.kind !== 'read') return `Done. ${plan.explanation}`;
+  if (!out.rows.length) return `${plan.explanation} No rows matched.`;
+  const cols = Object.keys(out.rows[0]);
+  if (out.rows.length === 1 && cols.length === 1) return `${plan.explanation} The answer is ${out.rows[0][cols[0]]}.`;
+  const top = out.rows.slice(0, 3).map(r => cols.map(c => `${c} ${r[c]}`).join(', ')).join('; ');
+  return `${plan.explanation} Top results: ${top}.` + (out.rows.length > 3 ? ` And ${out.rows.length - 3} more.` : '');
+}
+
+// URL buttons still emit an action event; ack it or Slack shows a warning icon on the button.
+app.action('open_whiteboard', async ({ ack }) => { await ack(); });
 
 app.action('confirm_sql', async ({ ack, body, client }) => {
   await ack();
@@ -241,8 +309,8 @@ async function generateAndPreview(description, which, userId, channel, client) {
       subtitle: src,
       body: `${dataRows.length} rows · ${columns.length} columns → *${ctx.catalog}.${ctx.schema}*`,
       buttons: [
-        { text: 'Load as table', action_id: 'load_simple', value: base, style: 'primary' },
-        { text: 'Build medallion pipeline', action_id: 'load_medallion', value: base },
+        { text: 'Load table', action_id: 'load_simple', value: base, style: 'primary' },
+        { text: 'Build pipeline', action_id: 'load_medallion', value: base },
         { text: 'Cancel', action_id: 'cancel_upload' },
       ],
     };
@@ -274,15 +342,73 @@ app.action('cancel_sql', async ({ ack, body, client }) => {
   await post(client, body.channel.id, 'Cancelled. Nothing changed.');
 });
 
+// ─────────────────────────── voice clips → transcribe → answer → speak back ───────────────────────────
+
+const VOICE_ID = process.env.ELEVENLABS_VOICE_ID || '21m00Tcm4TlvDq8ikWAM';
+
+async function transcribeClip(file, client) {
+  // Slack transcribes clips itself (free) but takes a few seconds — poll briefly.
+  for (let i = 0; i < 8; i++) {
+    const t = file.transcription;
+    if (t?.status === 'complete' && t.preview?.content) return t.preview.content.replace(/\.{3}$/, '').trim();
+    if (t?.status && t.status !== 'processing') break;
+    await new Promise(r => setTimeout(r, 1500));
+    file = (await client.files.info({ file: file.id })).file;
+  }
+  // Fallback: ElevenLabs Scribe speech-to-text.
+  if (!process.env.ELEVENLABS_API_KEY) return null;
+  const dl = await fetch(file.url_private_download, { headers: { Authorization: `Bearer ${process.env.SLACK_BOT_TOKEN}` } });
+  const form = new FormData();
+  form.append('model_id', 'scribe_v1');
+  form.append('file', new Blob([await dl.arrayBuffer()], { type: file.mimetype || 'audio/mp4' }), file.name || 'clip.m4a');
+  const r = await fetch('https://api.elevenlabs.io/v1/speech-to-text', {
+    method: 'POST', headers: { 'xi-api-key': process.env.ELEVENLABS_API_KEY }, body: form,
+  });
+  if (!r.ok) throw new Error(`ElevenLabs transcription failed: ${(await r.text()).slice(0, 160)}`);
+  return (await r.json()).text?.trim() || null;
+}
+
+// ElevenLabs TTS → mp3 → uploaded back as a playable clip. A quota problem must never
+// block the text answer that already posted, so failures here only log.
+async function speakToChannel(text, channel, client, logger) {
+  try {
+    if (!process.env.ELEVENLABS_API_KEY || !text) return;
+    const r = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}?output_format=mp3_44100_64`, {
+      method: 'POST',
+      headers: { 'xi-api-key': process.env.ELEVENLABS_API_KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, model_id: 'eleven_turbo_v2_5' }),
+    });
+    if (!r.ok) throw new Error((await r.text()).slice(0, 160));
+    const mp3 = Buffer.from(await r.arrayBuffer());
+    await client.files.uploadV2({
+      channel_id: channel, file: mp3,
+      filename: 'data-wizard-answer.mp3', title: '🪄 Data Wizard — spoken answer',
+    });
+  } catch (err) { logger?.warn?.(`voice reply skipped: ${err.message}`); }
+}
+
+async function handleVoiceClip(file, event, client, logger) {
+  await post(client, event.channel_id, ':headphones: Got your voice note — transcribing…');
+  const said = await transcribeClip(file, client);
+  if (!said) { await post(client, event.channel_id, ":x: I couldn't transcribe that clip — try again, or type the question."); return; }
+  await post(client, event.channel_id, `:studio_microphone: *You said:* "${said}"`);
+  const result = await handleQuestion(said, event.user_id, event.channel_id, client);
+  await speakToChannel(result?.spoken, event.channel_id, client, logger);
+}
+
 // ─────────────────────────── CSV / scanned-PDF upload → table or pipeline ───────────────────────────
 
-app.event('file_shared', async ({ event, client, logger }) => {
+app.event('file_shared', async ({ event, client, logger, context }) => {
   try {
+    // Our own uploads (spoken answers, chart PNGs) fire file_shared too — never re-process them.
+    if (event.user_id && event.user_id === context.botUserId) return;
     const info = await client.files.info({ file: event.file_id });
     const file = info.file;
     const name = file.name || '';
     const isCsv = /\.csv$/i.test(name);
     const isPdf = /\.pdf$/i.test(name);
+    const isAudio = file.subtype === 'slack_audio' || /^audio\//.test(file.mimetype || '') || /\.(m4a|mp3|wav|ogg)$/i.test(name);
+    if (isAudio) { await handleVoiceClip(file, event, client, logger); return; }
     if (!isCsv && !isPdf) return;
 
     const dl = await fetch(file.url_private_download, { headers: { Authorization: `Bearer ${process.env.SLACK_BOT_TOKEN}` } });
@@ -316,8 +442,8 @@ app.event('file_shared', async ({ event, client, logger }) => {
       body: `${dataRows.length} rows · ${columns.length} columns → *${ctx.catalog}.${ctx.schema}*`,
       subtext: `Columns: ${preview}`,
       buttons: [
-        { text: 'Load as table', action_id: 'load_simple', value: base, style: 'primary' },
-        { text: 'Build medallion pipeline', action_id: 'load_medallion', value: base },
+        { text: 'Load table', action_id: 'load_simple', value: base, style: 'primary' },
+        { text: 'Build pipeline', action_id: 'load_medallion', value: base },
         { text: 'Cancel', action_id: 'cancel_upload' },
       ],
     };
@@ -515,9 +641,21 @@ function baseView({ blocks, medallion, channel, suggested, dest, submit }) {
 async function askDestination(client, body, medallion) {
   const ctx = ctxOf(body.user.id);
   const pending = pendingUpload.get(body.user.id);
-  const tables = await listTables(ctx.catalog, ctx.schema).catch(() => []);
-  await client.views.open({
+  // A trigger_id dies 3 seconds after the click, but listTables can take far longer on a
+  // cold Databricks warehouse (expired_trigger_id, modal never opens). Open a placeholder
+  // within the window, then swap in the real form when the table list arrives.
+  const opened = await client.views.open({
     trigger_id: body.trigger_id,
+    view: {
+      type: 'modal',
+      title: plain(medallion ? 'Build pipeline' : 'Load data'),
+      close: plain('Cancel'),
+      blocks: [{ type: 'section', text: { type: 'mrkdwn', text: ':hourglass_flowing_sand: Waking the warehouse and listing your tables…' } }],
+    },
+  });
+  const tables = await listTables(ctx.catalog, ctx.schema).catch(() => []);
+  await client.views.update({
+    view_id: opened.view.id,
     view: destinationView({
       ctx, suggested: body.actions[0].value, medallion, dest: 'new',
       tables, channel: body.channel.id, rowCount: pending?.dataRows?.length ?? 0,

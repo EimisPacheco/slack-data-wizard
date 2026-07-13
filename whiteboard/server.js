@@ -5,6 +5,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import express from 'express';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
@@ -52,6 +53,114 @@ app.post('/extract', async (req, res) => {
       rows: r.rows,
       types: columns.map(x => ({ name: x.name, type: x.type })),
       rowsInserted: loaded.rowsInserted,
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// ─────────────── sketch → Tableau dashboard ───────────────
+// Gemma vision describes the drawing in words; that description flows through the exact
+// same pipeline a typed "create a dashboard…" request uses (describeToSpec → buildAndDeploy),
+// so schema validation and Tableau publishing are shared, not reimplemented.
+
+const { describeToSpec, listTables } = await import(path.join(ROOT, 'viz-builder', 'spec.js'));
+const { buildAndDeploy, loadEnv } = await import(path.join(ROOT, 'viz-builder', 'deploy.js'));
+const { WebClient } = await import('@slack/web-api');
+const slack = process.env.SLACK_BOT_TOKEN ? new WebClient(process.env.SLACK_BOT_TOKEN) : null;
+
+const SKETCH_PROMPT = tables =>
+`This image is a hand-drawn whiteboard SKETCH of a chart the user wants built from their data.
+Available tables: ${tables.join(', ')}.
+Read the drawing: the chart shape (vertical bars, horizontal bars, a line, scattered dots) and any
+handwritten words (title, axis labels, category names, a table name).
+Reply with ONE short sentence describing the chart to build — chart type, table (the written one,
+or the closest available), and fields — e.g.:
+"a bar chart of count of signups by country from hackathon_signups"
+No JSON. No markdown. One sentence only.`;
+
+async function describeSketch(png, tables) {
+  const b64 = png.toString('base64');
+  const base = (process.env.GEMMA_BASE_URL || '').replace(/\/$/, '');
+  if (base) {
+    try {
+      const r = await fetch(`${base}/api/chat`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: process.env.GEMMA_MODEL || 'gemma4:31b',
+          messages: [{ role: 'user', content: SKETCH_PROMPT(tables), images: [b64] }],
+          stream: false, options: { temperature: 0 },
+        }),
+      });
+      if (!r.ok) throw new Error(`Ollama HTTP ${r.status}`);
+      const text = (await r.json()).message?.content?.trim();
+      if (text) return text;
+      throw new Error('empty vision reply');
+    } catch (err) {
+      if (!process.env.FIREWORKS_API_KEY) throw new Error(`Gemma droplet unavailable (${err.message})`);
+    }
+  }
+  const r = await fetch('https://api.fireworks.ai/inference/v1/chat/completions', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${process.env.FIREWORKS_API_KEY}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: process.env.FIREWORKS_GEMMA_MODEL || 'accounts/fireworks/models/gemma-3-27b-it',
+      temperature: 0,
+      messages: [{ role: 'user', content: [
+        { type: 'text', text: SKETCH_PROMPT(tables) },
+        { type: 'image_url', image_url: { url: `data:image/png;base64,${b64}` } },
+      ] }],
+    }),
+  });
+  if (!r.ok) throw new Error(`Fireworks HTTP ${r.status}: ${(await r.text()).slice(0, 150)}`);
+  const text = (await r.json()).choices?.[0]?.message?.content?.trim();
+  if (!text) throw new Error('empty vision reply');
+  return text;
+}
+
+app.post('/dashboard', async (req, res) => {
+  try {
+    const { image, channel, hint } = req.body || {};
+    if (!image) return res.status(400).json({ error: 'no image' });
+    const png = Buffer.from(image.replace(/^data:image\/png;base64,/, ''), 'base64');
+    const c = process.env.DATABRICKS_CATALOG || 'workspace';
+    const s = process.env.DATABRICKS_SCHEMA || 'data_wizard';
+
+    const tables = await listTables(c, s);
+    if (!tables.length) return res.json({ ok: false, message: `No tables in ${c}.${s} to chart — load some data first.` });
+
+    const described = await describeSketch(png, tables);
+    const request = hint ? `${described} (user hint: ${hint})` : described;
+    const specRes = await describeToSpec(c, s, tables, request);
+    if (!specRes.ok) return res.json({ ok: false, message: specRes.reason, described });
+    const spec = specRes.spec;
+    spec.sheetName = spec.title || 'Viz';
+
+    const env = loadEnv();
+    const r = await buildAndDeploy(spec, {
+      workbookName: (spec.title || `${spec.table} ${spec.chartType}`).slice(0, 60),
+      outDir: os.tmpdir(), catalog: c, schema: s,
+    });
+    const url = `${env.SERVER}/#/site/${env.SITE_NAME}/workbooks/${r.workbookId}`;
+    const chartPng = fs.readFileSync(r.png);
+
+    // Close the loop in Slack — but a Slack hiccup must not fail the build the browser is waiting on.
+    let posted = false;
+    if (slack && channel) {
+      try {
+        await slack.files.uploadV2({
+          channel_id: channel, file: chartPng, filename: `${spec.table}.png`,
+          title: spec.title || spec.table,
+          initial_comment: `🎨 *${spec.title || spec.table}* — built from your whiteboard sketch · <${url}|Open in Tableau>`,
+        });
+        posted = true;
+      } catch (e) { console.error(`Slack post-back failed: ${e.message}`); }
+    }
+
+    res.json({
+      ok: true, described, title: spec.title || spec.table, explanation: spec.explanation,
+      chartType: spec.chartType, table: spec.table, rows: r.rows,
+      url, png: chartPng.toString('base64'), posted,
     });
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });

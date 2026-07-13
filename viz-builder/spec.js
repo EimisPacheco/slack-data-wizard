@@ -14,11 +14,10 @@ const SYSTEM = `You turn a request for a chart into a Tableau visualization spec
 Reply with JSON only:
 {
   "table": "<one of the given tables>",
-  "chartType": "bar|hbar|line|scatter|map|table",
+  "chartType": "bar|hbar|line|scatter|table",
   "dimension": "<categorical or date column to group by>",
   "measure": "<numeric column to aggregate; for a count use any id-like column>",
   "aggregation": "SUM|AVG|COUNT|COUNTD",
-  "geoField": "<country column, ONLY when chartType is map>",
   "colorField": "<optional column to colour by>",
   "dateGranularity": "day|month|year (only if dimension is a date)",
   "title": "<short human title>",
@@ -27,7 +26,7 @@ Reply with JSON only:
 
 RULES:
 - Use ONLY tables and columns from the schema provided. Never invent names.
-- map requires a column of country names or ISO codes in geoField.
+- For geographic data (countries, regions), use bar or hbar grouped by that column — never a map.
 - line requires a date/timestamp dimension.
 - hbar suits many categories or long labels; bar suits few.
 - For "how many X", use aggregation COUNT.
@@ -89,6 +88,14 @@ export async function describeToSpec(catalog, schema, tables, description) {
   catch { return { ok: false, reason: `Model did not return a spec: ${text.slice(0, 100)}` }; }
 
   if (!spec.table) return { ok: false, reason: spec.explanation || 'Cannot chart that from these tables' };
+
+  // Tableau Cloud's image export fails on geocoded views ("error opening database 'GeocodingData'"),
+  // so a map spec can publish but never render back into Slack. Coerce to a bar of the geo column.
+  if (spec.chartType === 'map') {
+    spec.chartType = 'bar';
+    if (spec.geoField && !spec.dimension) spec.dimension = spec.geoField;
+    delete spec.geoField;
+  }
 
   // The model still occasionally invents a column — validate against the real schema.
   const cols = new Set((s[spec.table] || []).map(c => c.name.toLowerCase()));
