@@ -1,4 +1,4 @@
-# Devpost submission copy — Data Wizard (AMD Unicorn Track)
+# Submission Data Wizard (AMD Unicorn Track)
 
 ## Short Description (255 max)
 
