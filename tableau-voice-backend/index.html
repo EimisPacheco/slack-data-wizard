@@ -1,0 +1,223 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Tableau Voice Control</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <script src="https://cdn.jsdelivr.net/gh/tableau/extensions-api/lib/tableau.extensions.1.latest.js"></script>
+  <style>
+    body { 
+      font-family: Arial, sans-serif; 
+      padding: 20px;
+      max-width: 800px;
+      margin: 0 auto;
+    }
+    button { 
+      margin-right: 8px; 
+      margin-bottom: 8px;
+      padding: 10px 16px;
+      background: #0072B5;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 14px;
+    }
+    button:hover {
+      background: #005a8c;
+    }
+    #status {
+      padding: 12px;
+      margin: 16px 0;
+      border-radius: 4px;
+      background: #e3f2fd;
+      border-left: 4px solid #2196F3;
+    }
+    #log { 
+      white-space: pre-wrap; 
+      background: #f5f5f5; 
+      padding: 16px; 
+      border-radius: 4px;
+      min-height: 200px;
+      font-family: 'Courier New', monospace;
+      font-size: 13px;
+      line-height: 1.5;
+      overflow-y: auto;
+      max-height: 400px;
+    }
+    h2 {
+      color: #333;
+      margin-bottom: 24px;
+    }
+    .button-group {
+      margin-bottom: 20px;
+    }
+  </style>
+</head>
+<body>
+  <h2>🎙️ Tableau Voice Control Extension</h2>
+
+  <div class="button-group">
+    <button id="openVoice">Open Voice Agent</button>
+    <button id="testFilter">Test Filter (Prospecting)</button>
+    <button id="dumpFields">Dump Fields (Stages)</button>
+  </div>
+
+  <div id="status">Initializing...</div>
+  <div id="log"></div>
+
+<script>
+  const logEl = document.getElementById("log");
+  const statusEl = document.getElementById("status");
+
+  function log(msg) {
+    const timestamp = new Date().toLocaleTimeString();
+    logEl.textContent += `[${timestamp}] ${msg}\n`;
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  function setStatus(msg) {
+    statusEl.textContent = msg;
+  }
+
+  function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  let initialized = false;
+  let lastSeenCommandId = "";
+
+  async function initialize() {
+    try {
+      await tableau.extensions.initializeAsync();
+      initialized = true;
+      setStatus("✅ Extension initialized and connected to Tableau");
+      log("Extension initialized successfully");
+
+      const dashboard = tableau.extensions.dashboardContent.dashboard;
+      log("Dashboard: " + dashboard.name);
+      log("Worksheets found:");
+      dashboard.worksheets.forEach(w => log("  - " + w.name));
+
+      startPolling();
+    } catch (err) {
+      setStatus("❌ Initialization failed");
+      log("ERROR: Initialization failed - " + (err?.message || String(err)));
+    }
+  }
+
+  async function applyFilter(worksheetName, fieldName, value) {
+    if (!initialized) {
+      log("ERROR: Extension not initialized");
+      return;
+    }
+
+    const dashboard = tableau.extensions.dashboardContent.dashboard;
+    const worksheet = dashboard.worksheets.find(w => w.name === worksheetName);
+    
+    if (!worksheet) {
+      log("ERROR: Worksheet not found: " + worksheetName);
+      return;
+    }
+
+    try {
+      await worksheet.applyFilterAsync(
+        fieldName,
+        [value],
+        tableau.FilterUpdateType.Replace
+      );
+      log("✅ Filter applied: " + worksheetName + " → " + fieldName + " = " + value);
+    } catch (err) {
+      log("ERROR: Filter failed - " + (err?.message || String(err)));
+    }
+  }
+
+  async function dumpFields(worksheetName) {
+    if (!initialized) {
+      log("ERROR: Extension not initialized");
+      return;
+    }
+
+    const dashboard = tableau.extensions.dashboardContent.dashboard;
+    const worksheet = dashboard.worksheets.find(w => w.name === worksheetName);
+    
+    if (!worksheet) {
+      log("ERROR: Worksheet not found: " + worksheetName);
+      return;
+    }
+
+    try {
+      const summary = await worksheet.getSummaryDataAsync();
+      const cols = summary.columns || [];
+      log("Fields in worksheet '" + worksheetName + "':");
+      cols.forEach(c => log("  - " + c.fieldName));
+    } catch (err) {
+      log("ERROR: Dump fields failed - " + (err?.message || String(err)));
+    }
+  }
+
+  async function pollOnce() {
+    if (!initialized) return;
+
+    try {
+      const url = "/poll?sinceId=" + encodeURIComponent(lastSeenCommandId);
+      const res = await fetch(url, { method: "GET", cache: "no-store" });
+      
+      if (!res.ok) {
+        log("ERROR: Poll request failed with status " + res.status);
+        return;
+      }
+
+      const data = await res.json();
+
+      if (!data.ok) {
+        log("ERROR: Poll returned not ok: " + JSON.stringify(data));
+        return;
+      }
+
+      const action = data.action;
+      if (!action) return; // No new commands
+
+      if (action.id) {
+        lastSeenCommandId = action.id;
+      }
+
+      log("📨 Received command: " + JSON.stringify(action));
+
+      if (action.action === "set_filter") {
+        await applyFilter(action.worksheet, action.field, action.value);
+      } else {
+        log("WARN: Unknown action type: " + action.action);
+      }
+    } catch (err) {
+      log("ERROR: Poll failed - " + (err?.message || String(err)));
+    }
+  }
+
+  function startPolling() {
+    log("🔄 Polling started (checking every 1.5 seconds)");
+    setInterval(pollOnce, 1500);
+  }
+
+  // Button handlers
+  document.getElementById("openVoice").onclick = () => {
+    const url = window.location.origin + "/voice";
+    window.open(url, "_blank", "width=800,height=600");
+    log("🎤 Opened voice agent window");
+  };
+
+  document.getElementById("testFilter").onclick = async () => {
+    log("🧪 Testing filter...");
+    await applyFilter("Stages", "Stage", "Prospecting");
+  };
+
+  document.getElementById("dumpFields").onclick = async () => {
+    log("📋 Dumping fields...");
+    await dumpFields("Stages");
+  };
+
+  // Initialize on load
+  initialize();
+</script>
+</body>
+</html>

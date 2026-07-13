@@ -1,0 +1,14 @@
+{
+  "name": "data-wizard-mcp-server",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Exposes Data Wizard's data tools over MCP so Slackbot can invoke them.",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "express": "^5.2.1",
+    "zod": "^4.4.3"
+  }
+}

@@ -7,6 +7,8 @@ lakehouse, ask questions in plain English, and publish a Tableau dashboard — b
 into Slack. Every act of intelligence in the product is performed by **Gemma, an open-source model
 running on an AMD GPU**.
 
+> 📑 **Pitch deck:** [pitch-deck.html](pitch-deck.html) · [PDF](docs/Data-Wizard-Deck.pdf) — **Submission copy:** [SUBMISSION.md](SUBMISSION.md)
+
 ---
 
 ## The problem
@@ -155,9 +157,10 @@ Slack (Bolt, Socket Mode, Block Kit)
   ├── CSV / scanned PDF / whiteboard ──► Gemma vision (AMD GPU) ──► typed rows
   ├── plain-English question ──────────► Gemma NL→SQL (AMD GPU) ──► guard ──► Databricks
   ├── "create a dashboard" ────────────► Gemma chart spec (AMD GPU) ──► Tableau workbook
-  └── voice ───────────────────────────► ElevenLabs agent ──► the same functions
+  ├── voice ───────────────────────────► ElevenLabs agent ──► the same functions
+  └── MCP (Claude · Cursor · ChatGPT) ─► mcp-server ──► the same functions
                                               │
-                                    Databricks Free Edition
+                                          Databricks
                                    (Unity Catalog · medallion)
 ```
 
@@ -168,7 +171,10 @@ Slack (Bolt, Socket Mode, Block Kit)
 | `pdf-extract/` | Rasterise a scanned PDF, extract its table with Gemma vision |
 | `whiteboard/` | Draw a table by hand, get a real one — ⚠️ *in progress* |
 | `viz-builder/` | Sentence → Tableau `.twb` → published workbook → rendered PNG |
-| `datagen/` | Bootstrap a table from the live web (Perplexity) or synthetically |
+| `datagen/` | Bootstrap a table from the live web (Perplexity) or synthetically (OpenAI) |
+| `voice-agent/` | ElevenLabs voice agent: ask out loud, answers + transcripts posted back to Slack |
+| `mcp-server/` | Exposes the same tools over MCP (Streamable HTTP) to Claude, Cursor and ChatGPT |
+| `tableau-voice-backend/` | Tableau Extensions API: voice-controlled dashboard filtering |
 
 ---
 
@@ -221,6 +227,9 @@ against whatever tables actually exist in your catalog. These are just examples 
 - _"drop the bronze table"_ · _"delete the inactive users"_
 - The SQL is **shown, explained in plain English, and waits for your click**
 
+**🎙 Ask by voice**
+- Speak to the ElevenLabs "Data Wizard Voice" agent — it runs the same NL→SQL path, answers out loud, and posts every Q&A + the full transcript back into Slack. Destructive SQL is refused by voice.
+
 **Where you are**
 - `help` · `context` (where am I?) · `use catalog <name>` · `use schema <name>`
 
@@ -229,9 +238,17 @@ against whatever tables actually exist in your catalog. These are just examples 
 ## Running it
 
 ```bash
+cd slack-data-agent
 npm install
 npm run doctor      # preflight: Slack, Databricks, Gemma on AMD, Tableau, guard
-node slack-data-agent/app.js
+node app.js
+```
+
+Optional extras:
+
+```bash
+(cd voice-agent && node server.js)      # voice agent (needs its HTTPS tunnel for ElevenLabs)
+mcp-server/start-hosted.sh              # MCP endpoint for Slack / Claude / Cursor / ChatGPT
 ```
 
 Configuration lives in `.env` (never committed). `NL2SQL_PROVIDER=gemma` keeps the reasoning on the

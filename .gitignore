@@ -1,0 +1,19 @@
+.env
+.env.*
+!.env.sample
+
+# Credential files — never commit
+*.csv
+!csv-to-db/samples/*.csv
+*-hacks.json
+credentials*.json
+service-account*.json
+google-credentials.json
+
+node_modules/
+__pycache__/
+.venv/
+venv/
+
+.slack/
+.DS_Store

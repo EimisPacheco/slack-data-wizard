@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Talk to Data Wizard</title>
+<style>
+ body{margin:0;font-family:-apple-system,system-ui,sans-serif;background:#0f1b2d;color:#eef;display:flex;flex-direction:column;min-height:100vh}
+ header{padding:22px;text-align:center}
+ header h1{margin:0;font-size:22px}header p{opacity:.7;font-size:14px;margin:6px 0 0}
+ .stage{flex:1;display:flex;align-items:center;justify-content:center}
+ .hint{max-width:520px;margin:0 auto;padding:0 20px;text-align:center;opacity:.75;font-size:14px;line-height:1.6}
+ code{background:#1e2b40;padding:2px 6px;border-radius:5px}
+</style></head>
+<body>
+ <header><h1>🎙️ Talk to Data Wizard</h1><p>Ask about your data by voice — answers appear here and in Slack.</p></header>
+ <div class="stage"><elevenlabs-convai agent-id="agent_0001kx9sw5p9eedvjj5ktnz5hrpt"></elevenlabs-convai></div>
+ <p class="hint">Click the orb, allow the mic, and say something like<br><b>"How many signups are there per country?"</b><br><br>
+ If you hear <i>"quota exceeded"</i>, the ElevenLabs account is out of credits — everything else is wired; a funded key is all that's missing.</p>
+ <script src="https://unpkg.com/@elevenlabs/convai-widget-embed" async type="text/javascript"></script>
+</body></html>

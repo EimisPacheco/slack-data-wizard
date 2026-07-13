@@ -1,0 +1,1 @@
+{"name":"voice-agent","version":"1.0.0","type":"module","description":"ElevenLabs Conversational AI voice agent for the project.","dependencies":{"@elevenlabs/elevenlabs-js":"^2.57.0","express":"^5.2.1"}}
